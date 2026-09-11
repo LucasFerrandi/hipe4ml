@@ -294,7 +294,7 @@ def plot_corr(data_list, columns, labels=None, **kwds):
     return res
 
 
-def plot_bdt_eff(threshold, eff_sig):
+def plot_bdt_eff(threshold, eff_sig, leg_labels=None):
     """
     Plot the model efficiency calculated with the function
     bdt_efficiency_array() in analysis_utils
@@ -307,19 +307,42 @@ def plot_bdt_eff(threshold, eff_sig):
     eff_sig: array
         model efficiency array
 
+    leg_labels: array, optional
+        Labels for the efficiency curves when ``eff_sig`` is multidimensional.
+
     Returns
     -----------------------------------
     out: matplotlib.figure.Figure
         Plot containing model efficiency as a
         function of the threshold score
     """
-    res = plt.figure()
-    plt.plot(threshold, eff_sig, 'r.', label='Signal efficiency')
-    plt.legend()
-    plt.xlabel('BDT Score')
-    plt.ylabel('Efficiency')
-    plt.title('Efficiency vs Score')
-    plt.grid()
+    eff_sig = np.asarray(eff_sig)
+    if eff_sig.shape[0] == 1:
+        # Binary classification case
+        res = plt.figure()
+        plt.plot(threshold, eff_sig, 'r.', label='Signal efficiency')
+        plt.legend()
+        plt.xlabel('BDT-Score Threshold')
+        plt.ylabel('Efficiency')
+        plt.title('Efficiency vs Score Threshold')
+        plt.grid()
+        return res
+
+    # Multi-class classification case
+    if leg_labels is None or len(leg_labels) != eff_sig.shape[0]:
+        raise ValueError(
+            f'leg_labels must contain one label for each efficiency dimension. Number of labels provided: {len(leg_labels)}, number of efficiency dimensions: {eff_sig.shape[0]}')
+
+    res = []
+    for i_row, label in enumerate(leg_labels):
+        fig = plt.figure()
+        plt.plot(threshold, eff_sig[i_row,:], '.-',color='darkred', label=label)
+        # plt.legend()
+        plt.xlabel('BDT-Score Threshold')
+        plt.ylabel('Efficiency')
+        plt.title(f'Efficiency vs Score Threshold for {label}')
+        plt.grid()
+        res.append(fig)
     return res
 
 
@@ -689,7 +712,7 @@ def plot_precision_recall(y_truth, y_score, labels=None, pos_label=None):
     return res
 
 
-def plot_learning_curves(model, data, n_points=10):
+def plot_learning_curves(model, data, n_points=10, labels=None):
     """ Plot learning curves
 
     Parameters
@@ -704,32 +727,93 @@ def plot_learning_curves(model, data, n_points=10):
     n_points: int
         Number of points used to sample the learning curves
 
+    labels: list
+        Contains the labels to be displayed in the legend, used only in case of multi-classification. They must be in the same order as the 'data' columns.
+        If None the labels are class-1, class-2, ..., class-N
+
     Returns
     -------------------------------------
     out: matplotlib.figure.Figure
         Plot containing the learning curves
     """
 
-    res = plt.figure()
-    train_errors, test_errors = [], []
-    min_cand = 100
-    max_cand = len(data[0])
-    step = int((max_cand-min_cand)/n_points)
-    array_n_cand = np.arange(start=min_cand, stop=max_cand, step=step)
-    for n_cand in array_n_cand:
-        model.fit(data[0][:n_cand], data[1][:n_cand])
-        y_train_predict = model.predict(data[0][:n_cand], output_margin=False)
-        y_test_predict = model.predict(data[2], output_margin=False)
-        train_errors.append(mean_squared_error(
-            y_train_predict, data[1][:n_cand], multioutput='uniform_average'))
-        test_errors.append(mean_squared_error(
-            y_test_predict, data[3], multioutput='uniform_average'))
-    plt.plot(array_n_cand, np.sqrt(train_errors), 'r', lw=1, label='Train')
-    plt.plot(array_n_cand, np.sqrt(test_errors), 'b', lw=1, label='Test')
-    plt.ylim([0, np.amax(np.sqrt(test_errors))*2])
-    plt.xlabel('Training set size')
-    plt.ylabel('RMSE')
-    plt.grid()
-    plt.legend(loc='best')
+    class_labels = np.unique(data[1])
+    n_classes = len(class_labels)
+
+    if n_classes < 2:
+        res = plt.figure()
+        train_errors, test_errors = [], []
+        min_cand = 100
+        max_cand = len(data[0])
+        step = int((max_cand-min_cand)/n_points)
+        array_n_cand = np.arange(start=min_cand, stop=max_cand, step=step)
+        for n_cand in array_n_cand:
+            model.fit(data[0][:n_cand], data[1][:n_cand])
+            y_train_predict = model.predict(data[0][:n_cand], output_margin=False)
+            y_test_predict = model.predict(data[2], output_margin=False)
+            train_errors.append(mean_squared_error(
+                y_train_predict, data[1][:n_cand], multioutput='uniform_average'))
+            test_errors.append(mean_squared_error(
+                y_test_predict, data[3], multioutput='uniform_average'))
+        plt.plot(array_n_cand, np.sqrt(train_errors), 'r', lw=1, label='Train')
+        plt.plot(array_n_cand, np.sqrt(test_errors), 'b', lw=1, label='Test')
+        plt.ylim([0, np.amax(np.sqrt(test_errors))*2])
+        plt.xlabel('Training set size')
+        plt.ylabel('RMSE')
+        plt.grid()
+        plt.legend(loc='best')
+
+        return res
+
+    # Multi-class case: one subplot for each class
+    res = plt.figure(figsize=(8, 6 * n_classes))
+
+    for labelId in class_labels:
+        ax = res.add_subplot(n_classes, 1, labelId + 1)
+
+        train_errors, test_errors = [], []
+
+        min_cand = 100
+        max_cand = len(data[0])
+        step = int((max_cand - min_cand) / n_points)
+        array_n_cand = np.arange(min_cand, max_cand, step=step)
+
+        for n_cand in array_n_cand:
+            model.fit(data[0][:n_cand], data[1][:n_cand])
+
+            y_train_predict = model.predict(
+                data[0][:n_cand], output_margin=False
+            )
+            y_test_predict = model.predict(
+                data[2], output_margin=False
+            )
+
+            train_errors.append(
+                mean_squared_error(
+                    y_train_predict[:, labelId],
+                    data[1][:n_cand],
+                    multioutput='uniform_average'
+                )
+            )
+
+            test_errors.append(
+                mean_squared_error(
+                    y_test_predict[:, labelId],
+                    data[3],
+                    multioutput='uniform_average'
+                )
+            )
+
+        ax.plot(array_n_cand, np.sqrt(train_errors),
+                'r', lw=1, label='Train')
+        ax.plot(array_n_cand, np.sqrt(test_errors),
+                'b', lw=1, label='Test')
+
+        ax.set_ylim([0, np.amax(np.sqrt(test_errors)) * 2])
+        ax.set_xlabel('Training set size')
+        ax.set_ylabel(f'{labels[labelId] if labels else f"Class-{labelId}"} RMSE')
+        ax.grid()
+        ax.legend(loc='best')
 
     return res
+
