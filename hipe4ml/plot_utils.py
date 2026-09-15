@@ -294,7 +294,8 @@ def plot_corr(data_list, columns, labels=None, **kwds):
     return res
 
 
-def plot_bdt_eff(threshold, eff_sig, leg_labels=None):
+
+def plot_bdt_eff(threshold, eff_sig, cont_sig=None, signif_sig=None, leg_labels=None, contaminColors=None):
     """
     Plot the model efficiency calculated with the function
     bdt_efficiency_array() in analysis_utils
@@ -307,8 +308,22 @@ def plot_bdt_eff(threshold, eff_sig, leg_labels=None):
     eff_sig: array
         model efficiency array
 
+    signif_sig: array, optional
+        Significance array with shape ``(n_classes, n_thresholds)``.
+        ``signif_sig[target, threshold]`` contains the significance of ``target``
+        at the given threshold.
+
     leg_labels: array, optional
         Labels for the efficiency curves when ``eff_sig`` is multidimensional.
+
+    cont_sig: array, optional
+        Contamination array with shape ``(n_classes, n_classes, n_thresholds)``.
+        ``cont_sig[target, source]`` contains the contamination of ``target``
+        from ``source``. If supplied, contamination and efficiency curves are
+        plotted together.
+
+    colors: list of str, optional
+        Colors for the efficiency and contamination curves. If not supplied, default colors are used. Size must be at least ``n_classes - 1`` to color all contamination curves.
 
     Returns
     -----------------------------------
@@ -316,33 +331,130 @@ def plot_bdt_eff(threshold, eff_sig, leg_labels=None):
         Plot containing model efficiency as a
         function of the threshold score
     """
+    threshold = np.asarray(threshold)
     eff_sig = np.asarray(eff_sig)
-    if eff_sig.shape[0] == 1:
-        # Binary classification case
-        res = plt.figure()
-        plt.plot(threshold, eff_sig, 'r.', label='Signal efficiency')
-        plt.legend()
-        plt.xlabel('BDT-Score Threshold')
-        plt.ylabel('Efficiency')
-        plt.title('Efficiency vs Score Threshold')
-        plt.grid()
+    if threshold.ndim != 1 or eff_sig.ndim not in (1, 2):
+        raise ValueError('threshold must be one-dimensional and eff_sig must be one- or two-dimensional')
+    if eff_sig.shape[-1] != threshold.size:
+        raise ValueError('threshold and eff_sig must have the same length')
+
+    curves = eff_sig[np.newaxis, :] if eff_sig.ndim == 1 else eff_sig
+
+    def make_plot(values, label, title):
+        fig, axis = plt.subplots()
+        axis.plot(threshold, values, '.-', color='maroon', label=label)
+        axis.set_xlabel('BDT-Score Threshold')
+        axis.set_ylabel('Efficiency')
+        axis.set_title(title)
+        axis.grid(True)
+        axis.legend()
+        return fig
+    
+    if cont_sig is not None:
+        if curves.shape[0] == 1:
+            raise ValueError('Calculation of purity, contamination and significance only implemented for the multi-class case') # todo: Implement also for binary classification
+        cont_sig = np.asarray(cont_sig)
+        if cont_sig.ndim != 3 or cont_sig.shape[0] != cont_sig.shape[1]:
+            raise ValueError('cont_sig must have shape (n_classes, n_classes, n_thresholds)')
+        if cont_sig.shape[2] != threshold.size:
+            raise ValueError('threshold and cont_sig must have the same length')
+        n_classes = cont_sig.shape[0]
+        if leg_labels is None or len(leg_labels) != n_classes:
+            raise ValueError(
+                f'leg_labels must contain one label for each class. Number of labels provided: '
+                f'{0 if leg_labels is None else len(leg_labels)}, number of classes: {n_classes}')
+        if curves.shape[0] not in (1, n_classes):
+            raise ValueError('eff_sig must contain one curve or one curve for each class')
+
+        res = []
+        for target, target_label in enumerate(leg_labels):
+            fig, (axis, axis_signif) = plt.subplots(
+                2, 1,
+                sharex=True,
+                figsize=(8, 8),
+                gridspec_kw={'height_ratios': [2, 1]}
+            )
+
+            # Main plot: efficiency, purity, contaminations
+            efficiency_index = 0 if curves.shape[0] == 1 else target
+
+            axis.plot(
+                threshold,
+                curves[efficiency_index],
+                '.-',
+                color='maroon',
+                label=f'{target_label} efficiency'
+            )
+
+            purity = 1 - np.sum(
+                np.delete(cont_sig[target], target, axis=0),
+                axis=0
+            )
+
+            axis.plot(
+                threshold,
+                purity,
+                '.-',
+                color='midnightblue',
+                label=f'{target_label} Purity'
+            )
+
+            colorId = 0
+            for source, source_label in enumerate(leg_labels):
+                if source != target:
+                    axis.plot(
+                        threshold,
+                        cont_sig[target, source],
+                        '.--',
+                        label=f'{source_label} contamination',
+                        color=contaminColors[colorId]
+                        if contaminColors is not None else None
+                    )
+                    colorId += 1
+
+            axis.set_ylabel('Efficiency / Purity')
+            axis.set_title(
+                f'Efficiency and Purity vs Score Threshold for {target_label}'
+            )
+            axis.grid(True)
+            axis.legend()
+
+            # Lower plot: significance
+            axis_signif.plot(
+                threshold,
+                signif_sig[target],
+                '.-',
+                color='maroon',
+                label=f'"Asimov" Significance for {target_label} as signal'
+            )
+
+            axis_signif.set_xlabel(f'{target_label}-Score Threshold')
+            axis_signif.set_ylabel("Significance")
+            axis_signif.grid(True)
+            axis_signif.legend()
+
+            plt.tight_layout()
+
+            res.append(fig)
         return res
 
+    # Binary classification accepts both (n,) and the legacy (1, n) input.
+    elif curves.shape[0] == 1:
+        values = curves[0]
+        label = 'Signal efficiency'
+        ylabel = 'Efficiency'
+        return make_plot(values, label, f'{ylabel} vs Score Threshold')
+
     # Multi-class classification case
-    if leg_labels is None or len(leg_labels) != eff_sig.shape[0]:
+    if leg_labels is None or len(leg_labels) != curves.shape[0]:
         raise ValueError(
-            f'leg_labels must contain one label for each efficiency dimension. Number of labels provided: {len(leg_labels)}, number of efficiency dimensions: {eff_sig.shape[0]}')
+            f'leg_labels must contain one label for each efficiency dimension. Number of labels provided: {0 if leg_labels is None else len(leg_labels)}, number of efficiency dimensions: {curves.shape[0]}')
 
     res = []
     for i_row, label in enumerate(leg_labels):
-        fig = plt.figure()
-        plt.plot(threshold, eff_sig[i_row,:], '.-',color='darkred', label=label)
-        # plt.legend()
-        plt.xlabel('BDT-Score Threshold')
-        plt.ylabel('Efficiency')
-        plt.title(f'Efficiency vs Score Threshold for {label}')
-        plt.grid()
-        res.append(fig)
+        values = curves[i_row]
+        ylabel = 'Efficiency'
+        res.append(make_plot(values, label, f'{ylabel} vs Score Threshold for {label}'))
     return res
 
 

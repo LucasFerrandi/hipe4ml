@@ -8,12 +8,11 @@ from sklearn.preprocessing import label_binarize
 from sklearn.model_selection import train_test_split
 
 
-def bdt_efficiency_array(y_truth, y_score, n_points=50, keep_lower=False):
+def bdt_efficiency_array(y_truth, y_score, n_points=50,
+                         keep_lower=False, calculate_contamination=False):
     """
     Calculate the model efficiency as a function of the score
-    threshold. The candidates for each class should be labeled
-    with 0, ..., N. In case of binary classification, 0 should
-    correspond to the background while 1 to the signal
+    threshold.
 
     Parameters
     ------------------------------------------------
@@ -34,49 +33,135 @@ def bdt_efficiency_array(y_truth, y_score, n_points=50, keep_lower=False):
         score lower than the score threshold; otherwise using the
         candidates with score higher than the score threshold.
 
+    calculate_contamination : bool
+        If True, also calculate the contamination from each other class.
+        In that case, significance is always computed as well
+
     Returns
     ------------------------------------------------
-    out: numpy array
-        Efficiency as a function of the threshold value
-        Numpy array of numpy arrays in case of multi-classification
+    efficiencies : numpy array
+        Efficiency as a function of threshold.
 
-    out: numpy array
-        Threshold values
+    threshold : numpy array
+        Threshold values.
+
+    contaminations : numpy array
+        Only returned if calculate_contamination=True.
+        For multi-class classification:
+        contaminations[signal_class, source_class, threshold]
+        For binary classification:
+        contaminations[1, 0, threshold]
+        contains the background contamination of the signal sample.
+
+    significance : numpy array
+        Only returned if calculate_contamination=True.
+        For binary classification, significance is computed as
+        signal / sqrt(total contamination). For multi-class
+        classification, it is computed class-by-class.
     """
+    y_truth = np.asarray(y_truth)
+    y_score = np.asarray(y_score)
+    if y_truth.ndim == 0:
+        y_truth = y_truth.reshape(1)
+    if y_score.ndim == 0:
+        y_score = y_score.reshape(1)
+
+    if y_truth.shape[0] != y_score.shape[0]:
+        raise ValueError("y_truth and y_score must have the same number of samples")
+
     operator = np.greater
     if keep_lower:
         operator = np.less
-    # get number of classes
     n_classes = len(np.unique(y_truth))
-
-    min_score = np.min(y_score)
-    max_score = np.max(y_score)
-
-    threshold = np.linspace(min_score, max_score, n_points)
-
-    if n_classes <= 2:
-        n_sig = np.sum(y_truth)
-
-        efficiency = np.empty((0, n_points))
-        for thr in threshold:
-            n_sig_selected = np.sum(y_truth[operator(y_score, thr)])
-            efficiency = np.append(efficiency, [n_sig_selected/n_sig])
-        efficiencies = efficiency
+    if n_points <= 1:
+        raise ValueError("n_points must be greater than 1")
     else:
-        efficiencies = []
-        for clas in range(n_classes):
-            y_truth_multi = label_binarize(y_truth, classes=range(n_classes))
-            # considering signal only the class for the same BDT output
-            n_sig = np.sum(y_truth_multi[:, clas])
+        min_score = np.min(y_score)
+        max_score = np.max(y_score)
+        threshold = np.linspace(min_score, max_score, n_points)
 
-            efficiency = np.empty((0, n_points))
-            for thr in threshold:
+    significance = None
+    if n_classes <= 2:
+        # Class 1 is the signal
+        n_sig = np.sum(y_truth)
+        efficiencies = np.zeros(n_points)
+        if calculate_contamination:
+            contaminations = np.zeros((2, 2, n_points))
+            # significance = np.zeros(n_points)
+            significance = np.zeros((n_classes, n_points))
+        for i, thr in enumerate(threshold):
+            mask = operator(y_score, thr)
+            maskBkg = np.less(y_score , thr)
+            n_selected = np.sum(mask)
+            n_sig_selected = np.sum(y_truth[mask])
+            if n_sig > 0:
+                efficiencies[i] = n_sig_selected / n_sig
+
+            if calculate_contamination and n_selected > 0:
+                # Class 0 contaminating class 1
+                contaminations[1, 0, i] = (
+                    np.sum((y_truth == 0) & mask) / n_selected
+                )
+
+                n_contamination = n_selected - n_sig_selected
+
+                # Significance
+                if n_contamination > 0:
+                    ratio = n_sig_selected / n_contamination
+                    inner = 2.0 * ((n_sig_selected + n_contamination) * np.log1p(ratio) - n_sig_selected)
+                    significance[0][i] = np.sqrt(np.maximum(inner, 0.0)) # "Asimov" Significance (eq. 97 from Eur. Phys. J. C (2011) 71: 1554)
+
+                    # significance[i] = n_sig_selected / np.sqrt(n_contamination)
+                elif n_sig_selected > 0:
+                    significance[i] = 9999 # simulate infinite significance when there is no background
+                else:
+                    significance[i] = 0.0
+
+                    
+    else:
+        y_truth_multi = label_binarize(
+            y_truth, classes=range(n_classes)
+        )
+        efficiencies = []
+        if calculate_contamination:
+            contaminations = np.zeros(
+                (n_classes, n_classes, n_points)
+            )
+            significance = np.zeros((n_classes, n_points))
+        for clas in range(n_classes):
+            n_sig = np.sum(y_truth_multi[:, clas])
+            efficiency = np.zeros(n_points)
+            for i, thr in enumerate(threshold):
+                mask = operator(y_score[:, clas], thr)
+                n_selected = np.sum(mask)
                 n_sig_selected = np.sum(
-                    y_truth_multi[:, clas][operator(y_score[:, clas], thr)])
-                efficiency = np.append(efficiency, [n_sig_selected/n_sig])
+                    y_truth_multi[:, clas][mask]
+                )
+                if n_sig > 0:
+                    efficiency[i] = n_sig_selected / n_sig
+                if calculate_contamination and n_selected > 0:
+                    # Calculate contamination from every other class
+                    for source_class in range(n_classes):
+                        if source_class == clas:
+                            continue
+                        n_contamination = np.sum(
+                            y_truth_multi[:, source_class][mask]
+                        )
+                        contaminations[
+                            clas, source_class, i
+                        ] = n_contamination / n_selected
+                    n_contamination = n_selected - n_sig_selected
+                    if n_contamination > 0:
+                        significance[clas, i] = n_sig_selected / np.sqrt(n_contamination)
+                    elif n_sig_selected > 0:
+                        significance[clas, i] = np.inf
+                    else:
+                        significance[clas, i] = 0.0
             efficiencies.append(efficiency)
         efficiencies = np.array(efficiencies)
 
+    if calculate_contamination:
+        return efficiencies, threshold, contaminations, significance
     return efficiencies, threshold
 
 
