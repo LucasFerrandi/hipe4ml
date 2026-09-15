@@ -12,7 +12,9 @@ def bdt_efficiency_array(y_truth, y_score, n_points=50,
                          keep_lower=False, calculate_contamination=False):
     """
     Calculate the model efficiency as a function of the score
-    threshold.
+    threshold. The candidates for each class should be labeled
+    with 0, ..., N. In case of binary classification, 0 should
+    correspond to the background while 1 to the signal
 
     Parameters
     ------------------------------------------------
@@ -40,7 +42,8 @@ def bdt_efficiency_array(y_truth, y_score, n_points=50,
     Returns
     ------------------------------------------------
     efficiencies : numpy array
-        Efficiency as a function of threshold.
+        Efficiency as a function of the threshold value
+        Numpy array of numpy arrays in case of multi-classification
 
     threshold : numpy array
         Threshold values.
