@@ -293,89 +293,113 @@ def plot_corr(data_list, columns, labels=None, **kwds):
 
     return res
 
-
-
-def plot_bdt_eff(threshold, eff_sig, cont_sig=None, signif_sig=None, leg_labels=None, contaminColors=None):
+def plot_bdt_eff(
+    threshold,
+    eff_sig,
+    cont_sig=None,
+    signif_sig=None,
+    leg_labels=None,
+    contaminColors=None,
+    chosen_bkg_rejec=None,
+    bkg_efficiencies=None
+):
     """
-    Plot the model efficiency calculated with the function
-    bdt_efficiency_array() in analysis_utils
+    Plot the BDT efficiency, purity, contamination and significance.
+
+    When bkg_efficiencies is supplied, an additional plot is produced
+    showing prompt and nonprompt efficiency as a function of the
+    bkg-score threshold. Supply the three arrays returned by
+    bdt_efficiency_array(..., calculate_bkg_efficiency=True).
 
     Parameters
     -----------------------------------
     threshold: array
-        Score threshold array
+        Score threshold array.
 
     eff_sig: array
-        model efficiency array
+        Model efficiency array.
 
     signif_sig: array, optional
-        Significance array with shape ``(n_classes, n_thresholds)``.
-        ``signif_sig[target, threshold]`` contains the significance of ``target``
-        at the given threshold.
+        Significance array with shape (n_classes, n_thresholds).
 
     leg_labels: array, optional
-        Labels for the efficiency curves when ``eff_sig`` is multidimensional.
+        Labels for the efficiency curves.
 
     cont_sig: array, optional
-        Contamination array with shape ``(n_classes, n_classes, n_thresholds)``.
-        ``cont_sig[target, source]`` contains the contamination of ``target``
-        from ``source``. If supplied, contamination and efficiency curves are
-        plotted together.
+        Contamination array with shape
+        (n_classes, n_classes, n_thresholds).
 
-    colors: list of str, optional
-        Colors for the efficiency and contamination curves. If not supplied, default colors are used. Size must be at least ``n_classes - 1`` to color all contamination curves.
+    contaminColors: list of str, optional
+        Colors for contamination curves.
 
-    Returns
-    -----------------------------------
-    out: matplotlib.figure.Figure
-        Plot containing model efficiency as a
-        function of the threshold score
+    bkg_efficiencies: tuple of arrays, optional
+        Prompt efficiency, nonprompt efficiency, and background rejection
+        calculated by bdt_efficiency_array with calculate_bkg_efficiency=True.
     """
     threshold = np.asarray(threshold)
     eff_sig = np.asarray(eff_sig)
+
     if threshold.ndim != 1 or eff_sig.ndim not in (1, 2):
-        raise ValueError('threshold must be one-dimensional and eff_sig must be one- or two-dimensional')
+        raise ValueError(
+            'threshold must be one-dimensional and '
+            'eff_sig must be one- or two-dimensional'
+        )
+
     if eff_sig.shape[-1] != threshold.size:
-        raise ValueError('threshold and eff_sig must have the same length')
+        raise ValueError(
+            'threshold and eff_sig must have the same length'
+        )
 
     curves = eff_sig[np.newaxis, :] if eff_sig.ndim == 1 else eff_sig
 
-    def make_plot(values, label, title):
-        fig, axis = plt.subplots()
-        axis.plot(threshold, values, '.-', color='maroon', label=label)
-        axis.set_xlabel('BDT-Score Threshold')
-        axis.set_ylabel('Efficiency')
-        axis.set_title(title)
-        axis.grid(True)
-        axis.legend()
-        return fig
-    
+    res = []
+
+    # Efficiency / purity / contamination / significance
     if cont_sig is not None:
         if curves.shape[0] == 1:
-            raise ValueError('Calculation of purity, contamination and significance only implemented for the multi-class case') # todo: Implement also for binary classification
+            raise ValueError(
+                'Calculation of purity, contamination and significance '
+                'only implemented for the multi-class case'
+            )
+
         cont_sig = np.asarray(cont_sig)
+
         if cont_sig.ndim != 3 or cont_sig.shape[0] != cont_sig.shape[1]:
-            raise ValueError('cont_sig must have shape (n_classes, n_classes, n_thresholds)')
+            raise ValueError(
+                'cont_sig must have shape '
+                '(n_classes, n_classes, n_thresholds)'
+            )
+
         if cont_sig.shape[2] != threshold.size:
-            raise ValueError('threshold and cont_sig must have the same length')
+            raise ValueError(
+                'threshold and cont_sig must have the same length'
+            )
+
         n_classes = cont_sig.shape[0]
+
         if leg_labels is None or len(leg_labels) != n_classes:
             raise ValueError(
-                f'leg_labels must contain one label for each class. Number of labels provided: '
-                f'{0 if leg_labels is None else len(leg_labels)}, number of classes: {n_classes}')
-        if curves.shape[0] not in (1, n_classes):
-            raise ValueError('eff_sig must contain one curve or one curve for each class')
+                f'leg_labels must contain one label for each class. '
+                f'Number of labels provided: '
+                f'{0 if leg_labels is None else len(leg_labels)}, '
+                f'number of classes: {n_classes}'
+            )
 
-        res = []
+        if curves.shape[0] not in (1, n_classes):
+            raise ValueError(
+                'eff_sig must contain one curve or one curve for each class'
+            )
+
         for target, target_label in enumerate(leg_labels):
             fig, (axis, axis_signif) = plt.subplots(
-                2, 1,
+                2,
+                1,
                 sharex=True,
                 figsize=(8, 8),
                 gridspec_kw={'height_ratios': [2, 1]}
             )
 
-            # Main plot: efficiency, purity, contaminations
+            # Main plot
             efficiency_index = 0 if curves.shape[0] == 1 else target
 
             axis.plot(
@@ -407,8 +431,11 @@ def plot_bdt_eff(threshold, eff_sig, cont_sig=None, signif_sig=None, leg_labels=
                         cont_sig[target, source],
                         '.--',
                         label=f'{source_label} contamination',
-                        color=contaminColors[colorId]
-                        if contaminColors is not None else None
+                        color=(
+                            contaminColors[colorId]
+                            if contaminColors is not None
+                            else None
+                        )
                     )
                     colorId += 1
 
@@ -419,7 +446,7 @@ def plot_bdt_eff(threshold, eff_sig, cont_sig=None, signif_sig=None, leg_labels=
             axis.grid(True)
             axis.legend()
 
-            # Lower plot: significance
+            # Significance
             axis_signif.plot(
                 threshold,
                 signif_sig[target],
@@ -429,21 +456,132 @@ def plot_bdt_eff(threshold, eff_sig, cont_sig=None, signif_sig=None, leg_labels=
             )
 
             axis_signif.set_xlabel(f'{target_label}-Score Threshold')
-            axis_signif.set_ylabel("Significance")
+            axis_signif.set_ylabel('Significance')
             axis_signif.grid(True)
             axis_signif.legend()
 
             plt.tight_layout()
-
             res.append(fig)
-        return res
 
-    # Binary classification accepts both (n,) and the legacy (1, n) input.
-    elif curves.shape[0] == 1:
-        values = curves[0]
-        label = 'Signal efficiency'
-        ylabel = 'Efficiency'
-        return make_plot(values, label, f'{ylabel} vs Score Threshold')
+    # Prompt / nonprompt efficiency vs BKG score threshold
+    if bkg_efficiencies is not None:
+        if len(bkg_efficiencies) != 3:
+            raise ValueError(
+                'bkg_efficiencies must contain prompt efficiency, '
+                'nonprompt efficiency, and background rejection'
+            )
+        eff_prompt, eff_nonprompt, bkg_rejec = (
+            np.asarray(values) for values in bkg_efficiencies
+        )
+        if any(values.shape != threshold.shape for values in
+               (eff_prompt, eff_nonprompt, bkg_rejec)):
+            raise ValueError(
+                'BKG efficiency arrays must match the threshold shape'
+            )
+
+        fig, axis = plt.subplots(figsize=(8, 5))
+
+        axis.plot(
+            threshold,
+            eff_prompt,
+            '.-',
+            color='maroon',
+            label='Prompt efficiency'
+        )
+
+        axis.plot(
+            threshold,
+            eff_nonprompt,
+            '.-',
+            color='midnightblue',
+            label='Non-prompt efficiency'
+        )
+
+        axis.plot(
+            threshold,
+            bkg_rejec,
+            '.-',
+            color='darkorange',
+            label='Background rejection'
+        )
+
+        if chosen_bkg_rejec:
+            axis.axvline(
+                x=chosen_bkg_rejec,
+                color='black',
+                linestyle=':',
+                linewidth=1.5,
+                label=f'Threshold = {chosen_bkg_rejec:.2f}'
+            )
+
+
+        axis.set_xlabel('bkg-Score Threshold')
+        axis.set_ylabel('Fraction')
+        axis.set_title(
+            'Background-rejection performance'
+        )
+        axis.grid(True)
+        axis.legend()
+
+        plt.tight_layout()
+        res.append(fig)
+
+    return res
+
+
+
+def plot_bdt_efficiency_vs_var(var_centers, prompt_eff, prompt_err, nonprompt_eff, nonprompt_err, nonpCut, bkgCut, var_name = None, fig=None, ax=None):
+
+    if fig is None and ax is None: # For only one nonpCut
+        fig, ax = plt.subplots(figsize=(4, 5))
+
+    ax.errorbar(
+        var_centers,
+        prompt_eff,
+        yerr=prompt_err,
+        marker="o",
+        linestyle="-",
+        color="maroon",
+        label="Prompt",
+    )
+
+    ax.errorbar(
+        var_centers,
+        nonprompt_eff,
+        yerr=nonprompt_err,
+        marker="o",
+        linestyle="-",
+        color="darkblue",
+        label="Non-prompt",
+    )
+
+    if var_name:
+        ax.set_xlabel(var_name, fontsize=18)
+    ax.set_ylabel("Efficiency", fontsize=18)
+    ax.set_ylim(0, 1.05)
+
+    ax.set_title(
+        rf"non-prompt score $>$ {nonpCut}",
+        fontsize=20
+    )
+
+    ax.legend(fontsize=18)
+    ax.grid(alpha=0.3)
+
+    plt.tight_layout()
+    # plt.show()
+    return fig, ax
+    
+
+
+
+
+
+
+
+
+
+
 
     # Multi-class classification case
     if leg_labels is None or len(leg_labels) != curves.shape[0]:
@@ -679,80 +817,355 @@ def plot_roc_train_test(y_truth_test, y_score_test, y_truth_train, y_score_train
     return res
 
 
-def plot_feature_imp(df_in, y_truth, model, labels=None, n_sample=10000, approximate=True):
+# def plot_feature_imp(df_in, y_truth, model, labels=None, n_sample=10000, approximate=True):
+#     """
+#     Calculate the feature importance using the shap algorithm for
+#     each feature. The calculation is performed on a subsample of the
+#     input training/test set
+
+#     Parameters
+#     -------------------------------------------
+#     df_in: Pandas dataframe
+#         Training or test set dataframe
+
+#     y_truth: array
+#         Training or test set label
+
+#     model: hipe4ml model_handler
+#         Trained model
+
+#     labels: list
+#         Contains the labels to be displayed in the legend
+#         If None the labels are class1, class2, ..., classN
+
+#     n_sample: int
+#         Number of candidates employed to fill
+#         the shap plots. If larger than the number of
+#         candidates in each class, minimum number of candidates
+#         in a given class used instead
+
+#     approximate: bool
+#         Run fast and approximat roughly the SHAP values. For more information
+#         see https://shap.readthedocs.io/en/latest/#shap.TreeExplainer.shap_values
+
+#     Returns
+#     -------------------------------------------
+#     out: List of matplotlib.figure.Figure
+#         Plots with shap feature importance. The first ones are the shap violin plots
+#         computed for each class(in case of binary classification only one plot is returned).
+#         The last plot of the list is built by taking the mean absolute value of the SHAP
+#         values for each feature to get a standard bar plot (stacked bars are produced for
+#         multi-class outputs)
+
+#     """
+#     class_labels, class_counts = np.unique(y_truth, return_counts=True)
+#     n_classes = len(class_labels)
+#     for class_count in class_counts:
+#         n_sample = min(n_sample, class_count)
+
+#     subs = []
+#     for class_lab in class_labels:
+#         subs.append(df_in[y_truth == class_lab].sample(n_sample))
+
+#     df_subs = pd.concat(subs)
+#     df_subs = df_subs[model.get_training_columns()]
+#     explainer = shap.TreeExplainer(model.get_original_model())
+#     shap_values = explainer.shap_values(df_subs, approximate=approximate)
+#     res = []
+
+#     if n_classes <= 2:
+#         res.append(plt.figure(figsize=(18, 9)))
+#         shap.summary_plot(shap_values, df_subs, plot_size=(
+#             18, 9), class_names=labels, show=False)
+#         res.append(plt.figure(figsize=(18, 9)))
+#         shap.summary_plot(shap_values, df_subs, plot_type='bar', plot_size=(
+#             18, 9), class_names=labels, show=False)
+#     else:
+#         shap_values_transposed = shap_values.transpose(2, 0, 1)
+#         for i_class in range(n_classes):
+#             res.append(plt.figure(figsize=(18, 9)))
+#             shap.summary_plot(shap_values_transposed[i_class], df_subs, plot_size=(
+#                 18, 9), class_names=labels, show=False)
+#         res.append(plt.figure(figsize=(18, 9)))
+#         shap.summary_plot(list(shap_values_transposed), df_subs, plot_type='bar', plot_size=(
+#             18, 9), class_names=labels, show=False)
+
+#     return res
+
+
+
+
+def plot_feature_imp(
+        df_in,
+        y_truth,
+        model,
+        labels=None,
+        n_sample=10000,
+        approximate=True,
+        features=None):
     """
-    Calculate the feature importance using the shap algorithm for
-    each feature. The calculation is performed on a subsample of the
-    input training/test set
+    Calculate the feature importance using the SHAP algorithm for each feature.
+    The calculation is performed on a subsample of the input training/test set.
 
     Parameters
     -------------------------------------------
     df_in: Pandas dataframe
-        Training or test set dataframe
+        Training or test set dataframe.
 
     y_truth: array
-        Training or test set label
+        Training or test set label.
 
     model: hipe4ml model_handler
-        Trained model
+        Trained model.
 
     labels: list
-        Contains the labels to be displayed in the legend
-        If None the labels are class1, class2, ..., classN
+        Contains the labels to be displayed in the legend.
+        If None the labels are class1, class2, ..., classN.
 
     n_sample: int
-        Number of candidates employed to fill
-        the shap plots. If larger than the number of
-        candidates in each class, minimum number of candidates
-        in a given class used instead
+        Number of candidates employed to fill the SHAP plots.
+        If larger than the number of candidates in each class,
+        the minimum number of candidates in a given class is used instead.
 
     approximate: bool
-        Run fast and approximat roughly the SHAP values. For more information
-        see https://shap.readthedocs.io/en/latest/#shap.TreeExplainer.shap_values
+        Run fast and approximate SHAP values.
+        For more information, see:
+        https://shap.readthedocs.io/en/latest/#shap.TreeExplainer.shap_values
+
+    features: list or None
+        List of feature names to display in the SHAP plots.
+        If None, all training features are displayed.
+
+        Note that the model is always evaluated using all its training
+        features; this option only controls which features are shown
+        in the final plots.
 
     Returns
     -------------------------------------------
     out: List of matplotlib.figure.Figure
-        Plots with shap feature importance. The first ones are the shap violin plots
-        computed for each class(in case of binary classification only one plot is returned).
-        The last plot of the list is built by taking the mean absolute value of the SHAP
-        values for each feature to get a standard bar plot (stacked bars are produced for
-        multi-class outputs)
+        Plots with SHAP feature importance.
 
+        For binary classification:
+            - SHAP summary (beeswarm) plot
+            - SHAP summary bar plot
+
+        For multi-class classification:
+            - One SHAP summary plot per class
+            - One combined SHAP summary bar plot
     """
+
+    # ------------------------------------------------------------------
+    # Classes
+    # ------------------------------------------------------------------
     class_labels, class_counts = np.unique(y_truth, return_counts=True)
     n_classes = len(class_labels)
-    for class_count in class_counts:
-        n_sample = min(n_sample, class_count)
 
+    # Limit the number of candidates to the smallest class if necessary
+    n_sample = min(n_sample, np.min(class_counts))
+
+    # ------------------------------------------------------------------
+    # Subsample the input dataframe, keeping the same number of
+    # candidates from each class
+    # ------------------------------------------------------------------
     subs = []
+
     for class_lab in class_labels:
-        subs.append(df_in[y_truth == class_lab].sample(n_sample))
+        class_df = df_in[y_truth == class_lab]
+        subs.append(class_df.sample(n_sample))
 
     df_subs = pd.concat(subs)
-    df_subs = df_subs[model.get_training_columns()]
+
+    # ------------------------------------------------------------------
+    # Get the columns actually used by the trained model
+    # ------------------------------------------------------------------
+    training_columns = model.get_training_columns()
+
+    df_subs = df_subs[training_columns]
+
+    # ------------------------------------------------------------------
+    # Check requested plotting features
+    # ------------------------------------------------------------------
+    if features is None:
+        plot_features = training_columns
+    else:
+        missing_features = [
+            feature for feature in features
+            if feature not in training_columns
+        ]
+
+        if missing_features:
+            raise ValueError(
+                f"The following features are not training features: "
+                f"{missing_features}"
+            )
+
+        # Preserve the order supplied by the user
+        plot_features = list(features)
+
+    # Indices of the selected features in the training feature list
+    plot_indices = [
+        training_columns.index(feature)
+        for feature in plot_features
+    ]
+
+    # Dataframe containing only the variables shown in the plots
+    df_plot = df_subs[plot_features]
+
+    # ------------------------------------------------------------------
+    # Calculate SHAP values using ALL features
+    # ------------------------------------------------------------------
     explainer = shap.TreeExplainer(model.get_original_model())
-    shap_values = explainer.shap_values(df_subs, approximate=approximate)
+
+    shap_values = explainer.shap_values(
+        df_subs,
+        approximate=approximate
+    )
+
     res = []
 
+    # ------------------------------------------------------------------
+    # Binary classification
+    # ------------------------------------------------------------------
     if n_classes <= 2:
-        res.append(plt.figure(figsize=(18, 9)))
-        shap.summary_plot(shap_values, df_subs, plot_size=(
-            18, 9), class_names=labels, show=False)
-        res.append(plt.figure(figsize=(18, 9)))
-        shap.summary_plot(shap_values, df_subs, plot_type='bar', plot_size=(
-            18, 9), class_names=labels, show=False)
+
+        # --------------------------------------------------------------
+        # SHAP beeswarm plot
+        # --------------------------------------------------------------
+        fig = plt.figure(figsize=(18, 9))
+
+        # SHAP can return either a list or an array depending on
+        # the SHAP/model/version combination
+        if isinstance(shap_values, list):
+            shap_values_plot = shap_values[0][:, plot_indices]
+        else:
+            shap_values_array = np.asarray(shap_values)
+
+            if shap_values_array.ndim == 3:
+                # Keep the first class, consistent with the original
+                shap_values_plot = shap_values_array[:, plot_indices, 0]
+            else:
+                shap_values_plot = shap_values_array[:, plot_indices]
+
+        shap.summary_plot(
+            shap_values_plot,
+            df_plot,
+            plot_size=(18, 9),
+            class_names=labels,
+            show=False
+        )
+
+        title = "SHAP Feature Importance — Summary"
+        if labels is not None and len(labels) > 0:
+            title += f" ({labels[0]})"
+
+        plt.title(title, fontsize=18, pad=15)
+        plt.tight_layout()
+
+        res.append(fig)
+
+        # --------------------------------------------------------------
+        # SHAP bar plot
+        # --------------------------------------------------------------
+        fig = plt.figure(figsize=(18, 9))
+
+        shap.summary_plot(
+            shap_values_plot,
+            df_plot,
+            plot_type="bar",
+            plot_size=(18, 9),
+            class_names=labels,
+            show=False
+        )
+
+        plt.title(
+            "SHAP Feature Importance — Mean |SHAP|",
+            fontsize=18,
+            pad=15
+        )
+        plt.tight_layout()
+
+        res.append(fig)
+
+    # ------------------------------------------------------------------
+    # Multi-class classification
+    # ------------------------------------------------------------------
     else:
-        shap_values_transposed = shap_values.transpose(2, 0, 1)
+
+        shap_values_array = np.asarray(shap_values)
+
+        # Expected shape:
+        # (n_samples, n_features, n_classes)
+        if shap_values_array.ndim != 3:
+            raise ValueError(
+                f"Unexpected SHAP array shape for multiclass model: "
+                f"{shap_values_array.shape}"
+            )
+
+        shap_values_transposed = shap_values_array.transpose(2, 0, 1)
+
+        # --------------------------------------------------------------
+        # One beeswarm plot for each class
+        # --------------------------------------------------------------
         for i_class in range(n_classes):
-            res.append(plt.figure(figsize=(18, 9)))
-            shap.summary_plot(shap_values_transposed[i_class], df_subs, plot_size=(
-                18, 9), class_names=labels, show=False)
-        res.append(plt.figure(figsize=(18, 9)))
-        shap.summary_plot(list(shap_values_transposed), df_subs, plot_type='bar', plot_size=(
-            18, 9), class_names=labels, show=False)
+
+            fig = plt.figure(figsize=(18, 9))
+
+            shap.summary_plot(
+                shap_values_transposed[i_class][:, plot_indices],
+                df_plot,
+                plot_size=(18, 9),
+                class_names=labels,
+                show=False
+            )
+
+            if labels is not None and i_class < len(labels):
+                class_name = labels[i_class]
+                title = (
+                    f"SHAP Feature Importance — "
+                    f"Class {i_class}: {class_name}"
+                )
+            else:
+                title = (
+                    f"SHAP Feature Importance — "
+                    f"Class {i_class}"
+                )
+
+            plt.title(title, fontsize=18, pad=15)
+            plt.tight_layout()
+
+            res.append(fig)
+
+        # --------------------------------------------------------------
+        # Combined bar plot
+        # --------------------------------------------------------------
+        fig = plt.figure(figsize=(18, 9))
+
+        shap_values_selected = [
+            shap_values_transposed[i_class][:, plot_indices]
+            for i_class in range(n_classes)
+        ]
+
+        shap.summary_plot(
+            shap_values_selected,
+            df_plot,
+            plot_type="bar",
+            plot_size=(18, 9),
+            class_names=labels,
+            show=False
+        )
+
+        plt.title(
+            "SHAP Feature Importance — Mean |SHAP| by Class",
+            fontsize=18,
+            pad=15
+        )
+        plt.tight_layout()
+
+        res.append(fig)
 
     return res
+
+
 
 
 def plot_precision_recall(y_truth, y_score, labels=None, pos_label=None):

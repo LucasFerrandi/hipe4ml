@@ -10,6 +10,18 @@ import pandas as pd
 import uproot
 
 
+def _get_file_list(file_name):
+    files = file_name if isinstance(file_name, list) else [file_name]
+    input_files = []
+    for file in files:
+        if isinstance(file, (str, os.PathLike)) and os.path.splitext(os.fspath(file))[1].lower() == '.txt':
+            with open(file, encoding='utf-8') as file_list:
+                input_files.extend(line.strip() for line in file_list if line.strip())
+        else:
+            input_files.append(file)
+    return input_files
+
+
 class TreeHandler:
     """
     Class for storing and managing the data of a ROOT tree from a .root file
@@ -25,7 +37,8 @@ class TreeHandler:
         Parameters
         ------------------------------------------------
         file_name: str or list of str
-            Name of the input file where the data sit or list of input files
+            Name of the input file where the data sit, list of input files, or path to a txt file
+            containing one input file path per line
 
         tree_name: str
             Name of the tree within the input file, must be the same for all files.
@@ -55,7 +68,7 @@ class TreeHandler:
             return
 
         self._full_data_frame = pd.DataFrame()
-        self._files = file_name if isinstance(file_name, list) else [file_name]
+        self._files = _get_file_list(file_name)
         for file in self._files:
             if self._tree is None:  # read from a parquet file
                 self._full_data_frame = pd.concat(
@@ -135,7 +148,8 @@ class TreeHandler:
         Parameters
         -----------------------------------------------
         file_name: str or list of str
-            Name of the input file where the data sit or list of input files
+            Name of the input file where the data sit, list of input files, or path to a txt file
+            containing one input file path per line
 
         tree_name: str
             Name of the tree within the input file, must be the same for all files
@@ -165,7 +179,7 @@ class TreeHandler:
             https://docs.python.org/3/library/concurrent.futures.html
 
         """
-        self._files = file_name if isinstance(file_name, list) else [file_name]
+        self._files = _get_file_list(file_name)
         self._tree = tree_name
         self._preselections = preselection
         inputs = [f'{file_name}:{tree_name}' for file_name in self._files]

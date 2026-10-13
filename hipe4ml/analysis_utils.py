@@ -9,7 +9,8 @@ from sklearn.model_selection import train_test_split
 
 
 def bdt_efficiency_array(y_truth, y_score, n_points=50,
-                         keep_lower=False, calculate_contamination=False):
+                         keep_lower=False, calculate_contamination=False,
+                         calculate_bkg_efficiency=False):
     """
     Calculate the model efficiency as a function of the score
     threshold. The candidates for each class should be labeled
@@ -38,6 +39,12 @@ def bdt_efficiency_array(y_truth, y_score, n_points=50,
     calculate_contamination : bool
         If True, also calculate the contamination from each other class.
         In that case, significance is always computed as well
+
+    calculate_bkg_efficiency : bool
+        If True, also calculate prompt efficiency, non-prompt efficiency,
+        and background rejection versus the background score threshold.
+        Background, prompt and nonprompt should correspond respectively to 0, 1 and 2.
+        The three arrays are appended to the returned tuple in that order.
 
     Returns
     ------------------------------------------------
@@ -83,6 +90,38 @@ def bdt_efficiency_array(y_truth, y_score, n_points=50,
         max_score = np.max(y_score)
         threshold = np.linspace(min_score, max_score, n_points)
 
+    bkg_efficiencies = None
+    if calculate_bkg_efficiency:
+        if y_truth.ndim != 1 or y_score.ndim != 2 or y_score.shape[1] < 3:
+            raise ValueError(
+                "BKG-score efficiencies require y_truth labels and "
+                "y_score columns [bkg, prompt, nonprompt]"
+            )
+        prompt_mask = y_truth == 1
+        nonprompt_mask = y_truth == 2
+        background_mask = y_truth == 0
+        n_prompt = np.sum(prompt_mask)
+        n_nonprompt = np.sum(nonprompt_mask)
+        n_background = np.sum(background_mask)
+        if n_prompt == 0 or n_nonprompt == 0 or n_background == 0:
+            raise ValueError(
+                "y_truth must contain at least 1 background, prompt, and nonprompt event"
+            )
+        bkg_score = y_score[:, 0]
+        prompt_efficiency = np.zeros(n_points)
+        nonprompt_efficiency = np.zeros(n_points)
+        background_rejection = np.zeros(n_points)
+        # The background score is used as an upper cut independently of
+        # keep_lower, which controls the main efficiency curves above.
+        for i, thr in enumerate(threshold):
+            mask = np.less(bkg_score, thr)
+            prompt_efficiency[i] = np.sum(prompt_mask & mask) / n_prompt
+            nonprompt_efficiency[i] = np.sum(nonprompt_mask & mask) / n_nonprompt
+            background_rejection[i] = np.sum(background_mask & ~mask) / n_background
+        bkg_efficiencies = (
+            prompt_efficiency, nonprompt_efficiency, background_rejection
+        )
+
     significance = None
     if n_classes <= 2:
         # Class 1 is the signal
@@ -94,7 +133,6 @@ def bdt_efficiency_array(y_truth, y_score, n_points=50,
             significance = np.zeros((n_classes, n_points))
         for i, thr in enumerate(threshold):
             mask = operator(y_score, thr)
-            maskBkg = np.less(y_score , thr)
             n_selected = np.sum(mask)
             n_sig_selected = np.sum(y_truth[mask])
             if n_sig > 0:
@@ -109,6 +147,7 @@ def bdt_efficiency_array(y_truth, y_score, n_points=50,
                 n_contamination = n_selected - n_sig_selected
 
                 # Significance
+                # Remember: if significance is extracted from MC, it is dependent of the model's f_B, then it is not trustworthy. Such as contamination
                 if n_contamination > 0:
                     ratio = n_sig_selected / n_contamination
                     inner = 2.0 * ((n_sig_selected + n_contamination) * np.log1p(ratio) - n_sig_selected)
@@ -120,7 +159,6 @@ def bdt_efficiency_array(y_truth, y_score, n_points=50,
                 else:
                     significance[i] = 0.0
 
-                    
     else:
         y_truth_multi = label_binarize(
             y_truth, classes=range(n_classes)
@@ -155,7 +193,10 @@ def bdt_efficiency_array(y_truth, y_score, n_points=50,
                         ] = n_contamination / n_selected
                     n_contamination = n_selected - n_sig_selected
                     if n_contamination > 0:
-                        significance[clas, i] = n_sig_selected / np.sqrt(n_contamination)
+                        ratio = n_sig_selected / n_contamination
+                        inner = 2.0 * ((n_sig_selected + n_contamination) * np.log1p(ratio) - n_sig_selected)
+                        significance[clas, i] = np.sqrt(np.maximum(inner, 0.0)) # "Asimov" Significance (eq. 97 from Eur. Phys. J. C (2011) 71: 1554)
+                        # Remember: if significance is extracted from MC, it is dependent of the model's f_B, then it is not trustworthy. Such as contamination
                     elif n_sig_selected > 0:
                         significance[clas, i] = np.inf
                     else:
@@ -163,9 +204,155 @@ def bdt_efficiency_array(y_truth, y_score, n_points=50,
             efficiencies.append(efficiency)
         efficiencies = np.array(efficiencies)
 
+    result = (efficiencies, threshold)
     if calculate_contamination:
-        return efficiencies, threshold, contaminations, significance
-    return efficiencies, threshold
+        result += (contaminations, significance)
+    if calculate_bkg_efficiency:
+        result += bkg_efficiencies
+    return result
+
+
+def bdt_efficiency_vs_var(
+    y_truth,
+    y_score,
+    var,
+    nonpCut,
+    bkgCut,
+    n_points=20,
+    var_max=None
+):
+    """
+    Calculate prompt and non-prompt efficiencies as a function of var (e.g: pT).
+
+    Parameters
+    ----------
+    y_truth : array-like
+        True class labels: 0 = background, 1 = prompt, 2 = non-prompt. # todo: generalize the order
+
+    y_score : array-like
+        BDT scores with columns:
+        [bkg_score, prompt_score, nonprompt_score].
+
+    var : array-like
+        var distribution of each candidate.
+
+    nonpCut : float
+        Minimum non-prompt BDT score.
+
+    bkgCut : float
+        Maximum background BDT score.
+
+    n_points : int
+        Number of var bins.
+
+    Returns
+    -------
+    pt_centers : ndarray
+        Centers of the var bins.
+
+    prompt_eff : ndarray
+        Prompt efficiency in each var bin.
+
+    prompt_err : ndarray
+        Statistical uncertainty on prompt efficiency.
+
+    nonprompt_eff : ndarray
+        Non-prompt efficiency in each var bin.
+
+    nonprompt_err : ndarray
+        Statistical uncertainty on non-prompt efficiency.
+    """
+
+    y_truth = np.asarray(y_truth)
+    y_score = np.asarray(y_score)
+    var = np.asarray(var)
+
+    if y_score.ndim != 2 or y_score.shape[1] < 3:
+        raise ValueError(
+            "y_score must have shape (n_samples, 3): "
+            "[bkg_score, prompt_score, nonprompt_score]"
+        )
+
+    if not (len(y_truth) == len(y_score) == len(var)):
+        raise ValueError(
+            "y_truth, y_score and var must have the same number of samples"
+        )
+
+    # BDT scores
+    bkg_score = y_score[:, 0]
+    nonp_score = y_score[:, 2]
+
+    # BDT selection
+    selection = (
+        (nonp_score > nonpCut)
+        & (bkg_score < bkgCut)
+    )
+
+    if not var_max:
+        var_max = np.max(var)
+
+    # var bins
+    var_edges = np.linspace(
+        np.min(var),
+        # np.max(var),
+        var_max,
+        n_points + 1
+    )
+
+    pt_centers = 0.5 * (var_edges[:-1] + var_edges[1:])
+
+    prompt_eff = np.zeros(n_points)
+    prompt_err = np.zeros(n_points)
+
+    nonprompt_eff = np.zeros(n_points)
+    nonprompt_err = np.zeros(n_points)
+
+    prompt = y_truth == 1
+    nonprompt = y_truth == 2
+
+    for i in range(n_points):
+        if i == n_points - 1:
+            pt_mask = (
+                (var >= var_edges[i])
+                & (var <= var_edges[i + 1])
+            )
+        else:
+            pt_mask = (
+                (var >= var_edges[i])
+                & (var < var_edges[i + 1])
+            )
+
+        # Prompt
+        n_prompt = np.sum(prompt & pt_mask) # N of true prompt in this var range
+        n_prompt_selected = np.sum(
+            prompt & pt_mask & selection
+        )
+        if n_prompt > 0:
+            prompt_eff[i] = n_prompt_selected / n_prompt
+            prompt_err[i] = np.sqrt(
+                prompt_eff[i] * (1 - prompt_eff[i]) / n_prompt
+            ) # Binomial error
+
+        # Non-prompt
+        n_nonprompt = np.sum(nonprompt & pt_mask)
+        n_nonprompt_selected = np.sum(
+            nonprompt & pt_mask & selection
+        )
+
+        if n_nonprompt > 0:
+            nonprompt_eff[i] = n_nonprompt_selected / n_nonprompt
+            nonprompt_err[i] = np.sqrt(
+                nonprompt_eff[i] * (1 - nonprompt_eff[i]) / n_nonprompt
+            )
+
+    return (
+        pt_centers,
+        prompt_eff,
+        prompt_err,
+        nonprompt_eff,
+        nonprompt_err,
+    )
+
 
 
 def score_from_efficiency_array(y_truth, y_score, efficiency_selected, keep_lower=False):
